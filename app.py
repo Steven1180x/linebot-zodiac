@@ -81,7 +81,7 @@ def handle_message(event):
 
   # 2. 簡單抓取時間（例如抓取「10點」、「8點」的數字）
   target_hour = None
-  for h in range(0, 24):
+  for h in range(23, -1, -1):
     if f"{h}點" in user_text or f"{h} 點" in user_text:
       target_hour = h
       break
