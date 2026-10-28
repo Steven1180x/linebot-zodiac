@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import random
@@ -8,16 +9,12 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# ----------------------------------------------------
-# 你的金鑰
-# ----------------------------------------------------
 CHANNEL_ACCESS_TOKEN = "y8IlW1kUPj89iT+su3f10ZbCS01TMlja1/KTMEe7x6iv5KA8ZTJlUprgKb/9h/t0HGVQjUk3LJ78uVDFVS17e5bYcsn/D8dZAMgkD+PKyGZtZPnjmoQrO7b6SJtNiCsYmh8Hvoy5nFfpz65FN/YvvgdB04t89/1O/w1cDnyilFU="
 CHANNEL_SECRET = "3e253f14b0e55da927272561a1cc1f0b"
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# 用 JSON 檔案記錄用戶訂閱的星座
 SUBSCRIPTION_FILE = "subscriptions.json"
 
 
@@ -33,7 +30,6 @@ def save_subscriptions(subs):
     json.dump(subs, f, ensure_ascii=False, indent=4)
 
 
-# 簡易星座運勢資料庫
 ZODIACS = [
     "白羊座",
     "牡羊座",
@@ -64,12 +60,10 @@ FORTUNES = [
 def callback():
   signature = request.headers.get("X-Line-Signature")
   body = request.get_data(as_text=True)
-
   try:
     handler.handle(body, signature)
   except InvalidSignatureError:
     abort(400)
-
   return "OK"
 
 
@@ -78,64 +72,79 @@ def handle_message(event):
   user_id = event.source.user_id
   user_text = event.message.text.strip()
 
-  # 判斷使用者輸入是否包含星座名稱
+  # 1. 找出使用者輸入的星座
   found_zodiac = None
   for z in ZODIACS:
     if z in user_text:
       found_zodiac = z
       break
 
-  if found_zodiac:
-    # 🎯 記錄/更新使用者的星座訂閱
+  # 2. 簡單抓取時間（例如抓取「10點」、「8點」的數字）
+  target_hour = None
+  for h in range(0, 24):
+    if f"{h}點" in user_text or f"{h} 點" in user_text:
+      target_hour = h
+      break
+
+  # 如果使用者同時提供了時間跟星座（例如：「10點天蠍座」）
+  if found_zodiac and target_hour is not None:
     subs = load_subscriptions()
-    subs[user_id] = found_zodiac
+    # 儲存為字典格式：記錄時間與星座
+    subs[user_id] = {"hour": target_hour, "zodiac": found_zodiac}
     save_subscriptions(subs)
 
-    lucky_color = random.choice(COLORS)
-    lucky_number = random.randint(1, 9)
-    today_fortune = random.choice(FORTUNES)
-
     reply_text = (
-        f"✨【{found_zodiac} 今日運勢指南】✨\n\n"
-        f"🎨 幸運顏色：{lucky_color}\n"
-        f"🔢 幸運數字：{lucky_number}\n"
-        f"💡 今日建議：{today_fortune}\n\n"
-        f"✅ (已自動幫您登記每日早安推播喔！)"
+        f"✅ 設定成功！\n"
+        f"⏰ 預定時間：每天 {target_hour} 點\n"
+        f"✨ 訂閱星座：{found_zodiac}\n\n"
+        f"時間到了之後系統就會自動推播給您喔！"
     )
   else:
     reply_text = (
-        "你好！請輸入你的「星座名字」（例如：天蠍座、獅子座），"
-        "我就能為你提供今天的幸運指南，並為你開啟每日早安推播喔！"
+        "💡 請告訴我您想設定的時間與星座！\n"
+        "例如請傳送：「**每天10點推播天蠍座**」或「**8點獅子座**」，"
+        "我就會幫您記錄下來喔！"
     )
 
   line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
 
-# ⏰ 每日早安推播 API (給外部排程工具呼叫用)
-@app.route("/api/push_daily", methods=["GET"])
-def push_daily():
+# ⏰ 每小時檢查一次的推播 API (給外部每小時排程呼叫)
+@app.route("/api/hourly_check", methods=["GET"])
+def hourly_check():
+  # 取得台灣現實時間的小時 (UTC+8)
+  tz_taiwan = timezone(timedelta(hours=8))
+  current_hour = datetime.now(tz_taiwan).hour
+
   subs = load_subscriptions()
   success_count = 0
 
-  for user_id, zodiac in subs.items():
-    lucky_color = random.choice(COLORS)
-    lucky_number = random.randint(1, 9)
-    today_fortune = random.choice(FORTUNES)
+  for user_id, data in subs.items():
+    # 如果使用者設定的推播時間剛好是現在這個小時
+    if isinstance(data, dict) and data.get("hour") == current_hour:
+      zodiac = data.get("zodiac")
+      lucky_color = random.choice(COLORS)
+      lucky_number = random.randint(1, 9)
+      today_fortune = random.choice(FORTUNES)
 
-    msg = (
-        f"☀️ 【早安！您的專屬星座運勢】 ☀️\n\n"
-        f"✨ 您的星座：{zodiac}\n"
-        f"🎨 今日幸運顏色：{lucky_color}\n"
-        f"🔢 今日幸運數字：{lucky_number}\n"
-        f"💡 今日建議：{today_fortune}"
-    )
-    try:
-      line_bot_api.push_message(user_id, TextSendMessage(text=msg))
-      success_count += 1
-    except Exception as e:
-      print(f"推播失敗給 {user_id}: {e}")
+      msg = (
+          f"☀️ 【定時專屬星座運勢】 ☀️\n\n"
+          f"✨ 星座：{zodiac}\n"
+          f"🎨 今日幸運顏色：{lucky_color}\n"
+          f"🔢 今日幸運數字：{lucky_number}\n"
+          f"💡 今日建議：{today_fortune}"
+      )
+      try:
+        line_bot_api.push_message(user_id, TextSendMessage(text=msg))
+        success_count += 1
+      except Exception as e:
+        print(f"推播失敗給 {user_id}: {e}")
 
-  return f"Daily push sent successfully to {success_count} users!", 200
+  return (
+      f"Hourly check completed. Current hour: {current_hour}, Sent:"
+      f" {success_count}",
+      200,
+  )
 
 
 if __name__ == "__main__":
